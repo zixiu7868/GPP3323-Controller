@@ -11,6 +11,9 @@ power supply over LAN SCPI.
   control and emergency all-output-off
 - Monitor tab: background voltage/current/power acquisition, live plots and
   UTF-8 CSV export
+- Automatic engineering units: values at or below 1 V/A are displayed using
+  mV/mA on the charts for better readability
+- Per-channel latest, minimum, maximum and average voltage/current statistics
 - Default endpoint: `10.0.0.123:1026`
 - No output is enabled automatically at startup or connection time
 

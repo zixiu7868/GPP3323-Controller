@@ -71,7 +71,7 @@ class MainWindow(tk.Tk):
         self.config_data.update(updates)
         try:
             self.config_path.write_text(
-                json.dumps(self.config_data, ensure_ascii=False, indent=2),
+                json.dumps(self.config_data, ensure_ascii=False, indent=2) + "\n",
                 encoding="utf-8",
             )
         except OSError as exc:

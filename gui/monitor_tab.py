@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import queue
+import statistics
 import threading
 import time
 import tkinter as tk
@@ -14,6 +15,7 @@ from typing import Any
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+from matplotlib.ticker import MaxNLocator
 
 from gpp3323 import GPP3323Client, Measurement
 
@@ -26,6 +28,51 @@ class Sample:
     voltage: float
     current: float
     power: float
+
+
+@dataclass(frozen=True)
+class ChannelStats:
+    latest_voltage: float
+    voltage_min: float
+    voltage_max: float
+    voltage_average: float
+    latest_current: float
+    current_min: float
+    current_max: float
+    current_average: float
+
+
+def engineering_scale(values: list[float], base_unit: str) -> tuple[float, str]:
+    """Return a readable scale for chart data in V/mV or A/mA."""
+    if values and max(abs(value) for value in values) <= 1.0:
+        return 1000.0, f"m{base_unit}"
+    return 1.0, base_unit
+
+
+def format_engineering(value: float, base_unit: str) -> str:
+    factor, unit = engineering_scale([value], base_unit)
+    return f"{value * factor:.5g} {unit}"
+
+
+def calculate_statistics(samples: list[Sample]) -> dict[int, ChannelStats]:
+    result: dict[int, ChannelStats] = {}
+    for channel in (1, 2, 3):
+        data = [sample for sample in samples if sample.channel == channel]
+        if not data:
+            continue
+        voltages = [sample.voltage for sample in data]
+        currents = [sample.current for sample in data]
+        result[channel] = ChannelStats(
+            latest_voltage=voltages[-1],
+            voltage_min=min(voltages),
+            voltage_max=max(voltages),
+            voltage_average=statistics.fmean(voltages),
+            latest_current=currents[-1],
+            current_min=min(currents),
+            current_max=max(currents),
+            current_average=statistics.fmean(currents),
+        )
+    return result
 
 
 class MonitorTab(ttk.Frame):
@@ -78,6 +125,38 @@ class MonitorTab(ttk.Frame):
         )
 
         ttk.Label(self, textvariable=self.latest_var, anchor="w").pack(fill="x", pady=(0, 6))
+
+        stats_frame = ttk.LabelFrame(self, text="統計（目前保留的量測資料）", padding=6)
+        stats_frame.pack(fill="x", pady=(0, 8))
+        columns = (
+            "channel",
+            "quantity",
+            "latest",
+            "minimum",
+            "maximum",
+            "average",
+        )
+        self.stats_table = ttk.Treeview(
+            stats_frame, columns=columns, show="headings", height=6
+        )
+        headings = {
+            "channel": "Channel",
+            "quantity": "量測項目",
+            "latest": "最新值",
+            "minimum": "最小值",
+            "maximum": "最大值",
+            "average": "平均值",
+        }
+        for column in columns:
+            self.stats_table.heading(column, text=headings[column])
+            self.stats_table.column(
+                column,
+                width=80 if column == "channel" else 145,
+                minwidth=65,
+                anchor="center",
+                stretch=True,
+            )
+        self.stats_table.pack(fill="x")
 
         self.figure = Figure(figsize=(9, 6), dpi=100, constrained_layout=True)
         self.voltage_axis = self.figure.add_subplot(211)
@@ -189,7 +268,9 @@ class MonitorTab(ttk.Frame):
                         del self.samples[: len(self.samples) - max_points]
                     self.latest_var.set(
                         f"{sample.timestamp:%Y-%m-%d %H:%M:%S}  CH{sample.channel}  "
-                        f"{sample.voltage:.5f} V   {sample.current:.5f} A   {sample.power:.5f} W"
+                        f"{format_engineering(sample.voltage, 'V')}   "
+                        f"{format_engineering(sample.current, 'A')}   "
+                        f"{sample.power:.5f} W"
                     )
                     changed = True
                 elif event == "error":
@@ -212,26 +293,92 @@ class MonitorTab(ttk.Frame):
     def _redraw(self) -> None:
         self.voltage_axis.clear()
         self.current_axis.clear()
+        voltage_factor, voltage_unit = engineering_scale(
+            [sample.voltage for sample in self.samples], "V"
+        )
+        current_factor, current_unit = engineering_scale(
+            [sample.current for sample in self.samples], "A"
+        )
         for channel in (1, 2, 3):
             data = [sample for sample in self.samples if sample.channel == channel]
             if not data:
                 continue
             x = [sample.elapsed for sample in data]
             self.voltage_axis.plot(
-                x, [sample.voltage for sample in data], label=f"CH{channel}", color=self.COLORS[channel]
+                x,
+                [sample.voltage * voltage_factor for sample in data],
+                label=f"CH{channel}",
+                color=self.COLORS[channel],
             )
             self.current_axis.plot(
-                x, [sample.current for sample in data], label=f"CH{channel}", color=self.COLORS[channel]
+                x,
+                [sample.current * current_factor for sample in data],
+                label=f"CH{channel}",
+                color=self.COLORS[channel],
             )
-        self.voltage_axis.set_ylabel("Voltage (V)")
-        self.current_axis.set_ylabel("Current (A)")
+        self.voltage_axis.set_ylabel(f"Voltage ({voltage_unit})")
+        self.current_axis.set_ylabel(f"Current ({current_unit})")
         self.current_axis.set_xlabel("Elapsed time (s)")
         self.voltage_axis.grid(True, alpha=0.25)
         self.current_axis.grid(True, alpha=0.25)
+        self.voltage_axis.ticklabel_format(axis="y", style="plain", useOffset=False)
+        self.current_axis.ticklabel_format(axis="y", style="plain", useOffset=False)
+        self.voltage_axis.yaxis.set_major_locator(MaxNLocator(nbins=6))
+        self.current_axis.yaxis.set_major_locator(MaxNLocator(nbins=6))
+        self.voltage_axis.margins(y=0.08)
+        self.current_axis.margins(y=0.08)
         if self.voltage_axis.lines:
             self.voltage_axis.legend(loc="upper right")
             self.current_axis.legend(loc="upper right")
+        self._update_statistics()
         self.canvas.draw_idle()
+
+    def _update_statistics(self) -> None:
+        for item in self.stats_table.get_children():
+            self.stats_table.delete(item)
+        for channel, stats in calculate_statistics(self.samples).items():
+            voltage_factor, voltage_unit = engineering_scale(
+                [
+                    stats.latest_voltage,
+                    stats.voltage_min,
+                    stats.voltage_max,
+                    stats.voltage_average,
+                ],
+                "V",
+            )
+            current_factor, current_unit = engineering_scale(
+                [
+                    stats.latest_current,
+                    stats.current_min,
+                    stats.current_max,
+                    stats.current_average,
+                ],
+                "A",
+            )
+            self.stats_table.insert(
+                "",
+                "end",
+                values=(
+                    f"CH{channel}",
+                    f"電壓 ({voltage_unit})",
+                    f"{stats.latest_voltage * voltage_factor:.5g}",
+                    f"{stats.voltage_min * voltage_factor:.5g}",
+                    f"{stats.voltage_max * voltage_factor:.5g}",
+                    f"{stats.voltage_average * voltage_factor:.5g}",
+                ),
+            )
+            self.stats_table.insert(
+                "",
+                "end",
+                values=(
+                    f"CH{channel}",
+                    f"電流 ({current_unit})",
+                    f"{stats.latest_current * current_factor:.5g}",
+                    f"{stats.current_min * current_factor:.5g}",
+                    f"{stats.current_max * current_factor:.5g}",
+                    f"{stats.current_average * current_factor:.5g}",
+                ),
+            )
 
     def export_csv(self) -> None:
         if not self.samples:
