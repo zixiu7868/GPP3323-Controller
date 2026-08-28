@@ -28,6 +28,9 @@ class FakeGPP3323:
         self.voltage = {1: 0.0, 2: 0.0, 3: 3.3}
         self.current = {1: 0.0, 2: 0.0}
         self.output = {1: False, 2: False, 3: False}
+        self.external_voltage = {1: 0.0, 2: 0.0, 3: 0.0}
+        self.mode = {1: "INDEPENDENT", 2: "INDEPENDENT"}
+        self.resistance = {1: 100.0, 2: 100.0}
         self._server = _Server((host, port), _Handler)
         self._server.instrument = self  # type: ignore[attr-defined]
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
@@ -71,6 +74,27 @@ class FakeGPP3323:
             self.current[channel] = float(match.group(2))
             return None
 
+        match = re.match(r":LOAD([12]):(CV|CC|CR)\s+(ON|OFF)$", upper)
+        if match:
+            channel = int(match.group(1))
+            self.output[channel] = False
+            self.mode[channel] = (
+                f"{match.group(2)} LOAD" if match.group(3) == "ON" else "INDEPENDENT"
+            )
+            return None
+
+        match = re.match(r":MODE([12])\?", upper)
+        if match:
+            return self.mode[int(match.group(1))]
+
+        match = re.match(r":LOAD([12]):RESISTOR(?:\s+(.+)|\?)$", upper)
+        if match:
+            channel = int(match.group(1))
+            if upper.endswith("?"):
+                return f"{self.resistance[channel]:.3f}"
+            self.resistance[channel] = float(match.group(2))
+            return None
+
         match = re.match(r":OUTPUT([123])(?:\s+(ON|OFF)|\?)$", upper)
         if match:
             channel = int(match.group(1))
@@ -82,7 +106,11 @@ class FakeGPP3323:
         match = re.match(r":MEASURE([123]):ALL\?", upper)
         if match:
             channel = int(match.group(1))
-            voltage = self.voltage[channel] if self.output[channel] else 0.0
+            voltage = (
+                self.voltage[channel]
+                if self.output[channel] and "LOAD" not in self.mode.get(channel, "")
+                else self.external_voltage[channel]
+            )
             current = 0.0 if channel == 3 or not self.output[channel] else min(
                 self.current[channel], voltage / 10.0
             )

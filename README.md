@@ -11,6 +11,8 @@ power supply over LAN SCPI.
   control and emergency all-output-off
 - Monitor tab: background voltage/current/power acquisition, live plots and
   UTF-8 CSV export
+- Load Mode tab: CH1/CH2 CV, CC and CR electronic-load settings, guarded load
+  input control, voltage/current/power plots and CSV export
 - Automatic engineering units: values at or below 1 V/A are displayed using
   mV/mA on the charts for better readability
 - Per-channel latest, minimum, maximum and average voltage/current statistics
@@ -51,6 +53,18 @@ queries from interleaving.
 | CH1 | 0-32 V | 0-3 A | Voltage/current/power |
 | CH2 | 0-32 V | 0-3 A | Voltage/current/power |
 | CH3 | 1.8/2.5/3.3/5.0 V | Not programmable | Voltage is set value; current/power reported as zero |
+
+## Electronic load mode
+
+CH1 and CH2 can operate as an electronic load in CV (1.5-33 V), CC (0-3.2 A)
+or CR (1-1000 ohm) mode. The single-channel overload protection is fixed at
+50 W. Applying a load setting does not turn the load input on; enabling it is a
+separate confirmed action. Verify polarity, wiring and the external source
+limits before enabling the load input.
+
+Before switching from power mode to load mode, the application measures the
+selected terminal. If 0.1 V or more is present, no load-mode command is sent
+and the user is asked to disconnect the external source first.
 
 Always confirm wiring, polarity, voltage, current limit and DUT rating before
 turning an output on. Closing the application does not inherently guarantee

@@ -3,5 +3,7 @@
   "port": 1026,
   "timeout": 3.0,
   "sample_interval": 1.0,
-  "max_points": 3600
+  "max_points": 3600,
+  "load_sample_interval": 1.0,
+  "load_max_points": 3600
 }

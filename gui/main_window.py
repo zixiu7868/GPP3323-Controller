@@ -10,6 +10,7 @@ from typing import Any, Callable
 from gpp3323 import GPP3323Client
 from gui.channel_tab import ChannelTab
 from gui.connection_tab import ConnectionTab
+from gui.load_tab import LoadTab
 from gui.monitor_tab import MonitorTab
 
 
@@ -40,9 +41,11 @@ class MainWindow(tk.Tk):
         )
         self.channel_tab = ChannelTab(notebook, self.get_client, self.run_io)
         self.monitor_tab = MonitorTab(notebook, self.get_client, self.config_data)
+        self.load_tab = LoadTab(notebook, self.get_client, self.run_io, self.config_data)
         notebook.add(self.connection_tab, text="  設備連線  ")
         notebook.add(self.channel_tab, text="  Channel 設定  ")
         notebook.add(self.monitor_tab, text="  連續量測  ")
+        notebook.add(self.load_tab, text="  Load Mode  ")
 
         self.status_var = tk.StringVar(value="未連線")
         ttk.Separator(self).pack(fill="x")
@@ -58,6 +61,8 @@ class MainWindow(tk.Tk):
             "timeout": 3.0,
             "sample_interval": 1.0,
             "max_points": 3600,
+            "load_sample_interval": 1.0,
+            "load_max_points": 3600,
         }
         try:
             loaded = json.loads(self.config_path.read_text(encoding="utf-8"))
@@ -86,16 +91,19 @@ class MainWindow(tk.Tk):
         self.client = client
         self.channel_tab.set_connected(True)
         self.monitor_tab.set_connected(True)
+        self.load_tab.set_connected(True)
         self.status_var.set(f"已連線：{client.identity}")
         self.channel_tab.refresh_all()
 
     def _disconnected(self) -> None:
         self.monitor_tab.stop()
+        self.load_tab.stop()
         if self.client:
             self.client.disconnect()
         self.client = None
         self.channel_tab.set_connected(False)
         self.monitor_tab.set_connected(False)
+        self.load_tab.set_connected(False)
         self.status_var.set("未連線")
 
     def run_io(
@@ -135,11 +143,12 @@ class MainWindow(tk.Tk):
 
     def _on_close(self) -> None:
         self.monitor_tab.stop()
-        output_on = self.channel_tab.any_output_on()
+        self.load_tab.stop()
+        output_on = self.channel_tab.any_output_on() or self.load_tab.any_input_on()
         if self.get_client() and output_on:
             choice = messagebox.askyesnocancel(
-                "輸出仍開啟",
-                "偵測到至少一個 Channel 輸出仍為 ON。\n\n"
+                "輸出或負載仍開啟",
+                "偵測到至少一個 Channel 輸出或 Load Input 仍為 ON。\n\n"
                 "選擇「是」：關閉全部輸出後離開\n"
                 "選擇「否」：保持輸出並離開\n"
                 "選擇「取消」：返回程式",
@@ -157,7 +166,10 @@ class MainWindow(tk.Tk):
                         parent=self,
                     ):
                         return
-        self.save_config(self.monitor_tab.current_config())
+        self.save_config({
+            **self.monitor_tab.current_config(),
+            **self.load_tab.current_config(),
+        })
         if self.client:
             self.client.disconnect()
         self.destroy()

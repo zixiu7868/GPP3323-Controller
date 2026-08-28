@@ -11,6 +11,18 @@ class GPPError(RuntimeError):
     """Raised when communication or validation fails."""
 
 
+class LoadVoltagePresentError(GPPError):
+    """Raised when external voltage prevents a safe switch to Load Mode."""
+
+    def __init__(self, channel: int, voltage: float) -> None:
+        self.channel = channel
+        self.voltage = voltage
+        super().__init__(
+            f"CH{channel} 端子目前偵測到 {voltage:.4g} V。"
+            "請先斷開外部電源，確認端子無電壓後再切換 Load Mode。"
+        )
+
+
 @dataclass(frozen=True)
 class Measurement:
     voltage: float
@@ -24,6 +36,13 @@ class GPP3323Client:
     CH12_MAX_VOLTAGE = 32.0
     CH12_MAX_CURRENT = 3.0
     CH3_VOLTAGES = (1.8, 2.5, 3.3, 5.0)
+    LOAD_MODES = ("CV", "CC", "CR")
+    LOAD_MIN_VOLTAGE = 1.5
+    LOAD_MAX_VOLTAGE = 33.0
+    LOAD_MAX_CURRENT = 3.2
+    LOAD_MIN_RESISTANCE = 1.0
+    LOAD_MAX_RESISTANCE = 1000.0
+    LOAD_SWITCH_VOLTAGE_THRESHOLD = 0.1
 
     def __init__(
         self,
@@ -168,6 +187,83 @@ class GPP3323Client:
         channel = self._validate_channel(channel)
         value = self.query(f":OUTPut{channel}?" ).upper()
         return value in {"1", "ON"}
+
+    @staticmethod
+    def _validate_load_channel(channel: int) -> int:
+        channel = int(channel)
+        if channel not in (1, 2):
+            raise ValueError("GPP-3323 Load Mode 僅支援 CH1 或 CH2")
+        return channel
+
+    @classmethod
+    def _validate_load_mode(cls, mode: str) -> str:
+        mode = str(mode).strip().upper()
+        if mode not in cls.LOAD_MODES:
+            raise ValueError("Load Mode 必須是 CV、CC 或 CR")
+        return mode
+
+    def set_load_mode(self, channel: int, mode: str, enabled: bool = True) -> None:
+        channel = self._validate_load_channel(channel)
+        mode = self._validate_load_mode(mode)
+        self.write(f":LOAD{channel}:{mode} {'ON' if enabled else 'OFF'}")
+
+    def get_channel_mode(self, channel: int) -> str:
+        channel = self._validate_load_channel(channel)
+        return self.query(f":MODE{channel}?")
+
+    def set_load_voltage(self, channel: int, voltage: float) -> None:
+        channel = self._validate_load_channel(channel)
+        voltage = float(voltage)
+        if not self.LOAD_MIN_VOLTAGE <= voltage <= self.LOAD_MAX_VOLTAGE:
+            raise ValueError("Load CV 電壓必須介於 1.5 至 33 V")
+        self.write(f":SOURce{channel}:VOLTage {voltage:.3f}")
+
+    def set_load_current(self, channel: int, current: float) -> None:
+        channel = self._validate_load_channel(channel)
+        current = float(current)
+        if not 0.0 <= current <= self.LOAD_MAX_CURRENT:
+            raise ValueError("Load CC 電流必須介於 0 至 3.2 A")
+        self.write(f":SOURce{channel}:CURRent {current:.4f}")
+
+    def set_load_resistance(self, channel: int, resistance: float) -> None:
+        channel = self._validate_load_channel(channel)
+        resistance = float(resistance)
+        if not self.LOAD_MIN_RESISTANCE <= resistance <= self.LOAD_MAX_RESISTANCE:
+            raise ValueError("Load CR 電阻必須介於 1 至 1000 Ω")
+        self.write(f":LOAD{channel}:RESistor {resistance:.3f}")
+
+    def get_load_setting(self, channel: int, mode: str) -> float:
+        channel = self._validate_load_channel(channel)
+        mode = self._validate_load_mode(mode)
+        if mode == "CV":
+            return float(self.query(f":SOURce{channel}:VOLTage?"))
+        if mode == "CC":
+            return float(self.query(f":SOURce{channel}:CURRent?"))
+        return float(self.query(f":LOAD{channel}:RESistor?"))
+
+    def configure_load(self, channel: int, mode: str, value: float) -> str:
+        """Switch mode and set its level without enabling the load input."""
+        channel = self._validate_load_channel(channel)
+        mode = self._validate_load_mode(mode)
+        value = float(value)
+        if mode == "CV" and not self.LOAD_MIN_VOLTAGE <= value <= self.LOAD_MAX_VOLTAGE:
+            raise ValueError("Load CV 電壓必須介於 1.5 至 33 V")
+        if mode == "CC" and not 0.0 <= value <= self.LOAD_MAX_CURRENT:
+            raise ValueError("Load CC 電流必須介於 0 至 3.2 A")
+        if mode == "CR" and not self.LOAD_MIN_RESISTANCE <= value <= self.LOAD_MAX_RESISTANCE:
+            raise ValueError("Load CR 電阻必須介於 1 至 1000 Ω")
+        with self._lock:
+            terminal_voltage = self.measure(channel).voltage
+            if abs(terminal_voltage) >= self.LOAD_SWITCH_VOLTAGE_THRESHOLD:
+                raise LoadVoltagePresentError(channel, terminal_voltage)
+            self.set_load_mode(channel, mode, True)
+            if mode == "CV":
+                self.set_load_voltage(channel, value)
+            elif mode == "CC":
+                self.set_load_current(channel, value)
+            else:
+                self.set_load_resistance(channel, value)
+            return self.get_error()
 
     def all_outputs_off(self) -> None:
         self.write("ALLOUTOFF")

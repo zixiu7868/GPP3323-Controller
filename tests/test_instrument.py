@@ -1,6 +1,6 @@
 import unittest
 
-from gpp3323 import GPP3323Client
+from gpp3323 import GPP3323Client, LoadVoltagePresentError
 from tests.fake_instrument import FakeGPP3323
 
 
@@ -14,6 +14,8 @@ class InstrumentTests(unittest.TestCase):
         cls.fake.stop()
 
     def setUp(self) -> None:
+        self.fake.mode = {1: "INDEPENDENT", 2: "INDEPENDENT"}
+        self.fake.external_voltage = {1: 0.0, 2: 0.0, 3: 0.0}
         host, port = self.fake.address
         self.client = GPP3323Client(host, port, timeout=1)
         self.client.connect()
@@ -49,6 +51,38 @@ class InstrumentTests(unittest.TestCase):
             self.client.set_voltage(1, 33.0)
         with self.assertRaises(ValueError):
             self.client.set_current(2, 3.1)
+
+    def test_configure_and_read_load_modes(self) -> None:
+        self.assertEqual(self.client.configure_load(1, "CC", 1.25), '0,"No error"')
+        self.assertEqual(self.client.get_channel_mode(1), "CC LOAD")
+        self.assertAlmostEqual(self.client.get_load_setting(1, "CC"), 1.25)
+        self.client.configure_load(2, "CV", 12.5)
+        self.assertAlmostEqual(self.client.get_load_setting(2, "CV"), 12.5)
+        self.client.configure_load(1, "CR", 220)
+        self.assertAlmostEqual(self.client.get_load_setting(1, "CR"), 220)
+
+    def test_load_validation(self) -> None:
+        with self.assertRaises(ValueError):
+            self.client.set_load_mode(3, "CC")
+        with self.assertRaises(ValueError):
+            self.client.configure_load(1, "CP", 1)
+        with self.assertRaises(ValueError):
+            self.client.set_load_voltage(1, 1.49)
+        with self.assertRaises(ValueError):
+            self.client.set_load_current(1, 3.21)
+        with self.assertRaises(ValueError):
+            self.client.set_load_resistance(2, 1001)
+
+    def test_load_mode_is_blocked_when_terminal_has_voltage(self) -> None:
+        mode_before = self.client.get_channel_mode(1)
+        self.fake.external_voltage[1] = 5.0
+        try:
+            with self.assertRaises(LoadVoltagePresentError) as context:
+                self.client.configure_load(1, "CC", 0.5)
+            self.assertAlmostEqual(context.exception.voltage, 5.0)
+            self.assertEqual(self.client.get_channel_mode(1), mode_before)
+        finally:
+            self.fake.external_voltage[1] = 0.0
 
 
 if __name__ == "__main__":
