@@ -1,6 +1,7 @@
+import socket
 import unittest
 
-from gpp3323 import GPP3323Client, LoadVoltagePresentError
+from gpp3323 import GPP3323Client, LoadVoltagePresentError, ResponseTimeoutError
 from tests.fake_instrument import FakeGPP3323
 
 
@@ -38,6 +39,56 @@ class InstrumentTests(unittest.TestCase):
         self.assertAlmostEqual(reading.voltage, 5.0)
         self.assertAlmostEqual(reading.current, 0.5)
         self.assertAlmostEqual(reading.power, 2.5)
+
+    def test_measure_retries_wait_once_without_resending_command(self) -> None:
+        class DelayedResponseSocket:
+            def __init__(self) -> None:
+                self.sent: list[bytes] = []
+                self.recv_count = 0
+
+            def sendall(self, data: bytes) -> None:
+                self.sent.append(data)
+
+            def recv(self, _size: int) -> bytes:
+                self.recv_count += 1
+                if self.recv_count == 1:
+                    raise socket.timeout
+                return b"5.00000,0.10000,0.50000\n"
+
+        client = GPP3323Client(timeout=3)
+        delayed_socket = DelayedResponseSocket()
+        client._socket = delayed_socket  # type: ignore[assignment]
+        notices: list[tuple[int, int]] = []
+
+        reading = client.measure(
+            1,
+            timeout_retries=1,
+            on_timeout=lambda attempt, total: notices.append((attempt, total)),
+        )
+
+        self.assertEqual(delayed_socket.sent, [b":MEASure1:ALL?\n"])
+        self.assertEqual(notices, [(1, 1)])
+        self.assertAlmostEqual(reading.power, 0.5)
+
+    def test_measure_raises_after_one_timeout_retry(self) -> None:
+        class NoResponseSocket:
+            def __init__(self) -> None:
+                self.sent: list[bytes] = []
+
+            def sendall(self, data: bytes) -> None:
+                self.sent.append(data)
+
+            def recv(self, _size: int) -> bytes:
+                raise socket.timeout
+
+        client = GPP3323Client(timeout=3)
+        no_response_socket = NoResponseSocket()
+        client._socket = no_response_socket  # type: ignore[assignment]
+
+        with self.assertRaises(ResponseTimeoutError):
+            client.measure(1, timeout_retries=1)
+
+        self.assertEqual(no_response_socket.sent, [b":MEASure1:ALL?\n"])
 
     def test_channel_3_restrictions(self) -> None:
         self.client.set_voltage(3, 3.3)
@@ -83,6 +134,27 @@ class InstrumentTests(unittest.TestCase):
             self.assertEqual(self.client.get_channel_mode(1), mode_before)
         finally:
             self.fake.external_voltage[1] = 0.0
+
+    def test_load_input_startup_off_and_explicit_enable(self) -> None:
+        self.client.configure_load(1, "CC", 0.5)
+        self.client.set_output(1, True)
+        states = self.client.ensure_load_inputs_off()
+        self.assertEqual(states[1], ("CC LOAD", False))
+        self.assertFalse(self.client.get_output(1))
+        self.assertEqual(self.client.enable_load_input(1), ("CC LOAD", True))
+        self.assertTrue(self.client.get_output(1))
+
+    def test_load_input_enable_requires_load_mode(self) -> None:
+        with self.assertRaisesRegex(Exception, "不是 Load Mode"):
+            self.client.enable_load_input(2)
+
+    def test_load_mode_reply_formats(self) -> None:
+        for reply in ("CC", "CV", "CR", "CC LOAD", "CV_Load", "cr-load", "CCLOAD"):
+            with self.subTest(reply=reply):
+                self.assertTrue(self.client.is_load_mode(reply))
+        for reply in ("INDEPENDENT", "SERIES", "PARALLEL", ""):
+            with self.subTest(reply=reply):
+                self.assertFalse(self.client.is_load_mode(reply))
 
 
 if __name__ == "__main__":

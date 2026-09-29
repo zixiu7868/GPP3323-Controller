@@ -1,9 +1,13 @@
 {
   "host": "10.0.0.123",
   "port": 1026,
-  "timeout": 3.0,
+  "timeout": 5.0,
   "sample_interval": 1.0,
   "max_points": 3600,
   "load_sample_interval": 1.0,
+  "load_stop_mode": "cutoff",
+  "load_test_duration_minutes": 60.0,
+  "load_cutoff_voltage": 2.0,
+  "load_notes": "Maxell\nCR2032XP ,#1\n1st run @7mA load\n",
   "load_max_points": 3600
 }

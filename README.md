@@ -66,6 +66,17 @@ Before switching from power mode to load mode, the application measures the
 selected terminal. If 0.1 V or more is present, no load-mode command is sent
 and the user is asked to disconnect the external source first.
 
+Load monitoring can stop after a selected test duration in minutes or when the measured
+voltage falls to a selected cutoff voltage. Reaching either condition stops
+the chart and turns the selected load input off. The elapsed test time remains
+visible while sampling. The application screenshot button captures the entire
+GUI window and saves a PNG in `data` with a timestamp and three-digit sequence
+number.
+
+On connection, CH1/CH2 inputs that are already in Load Mode are forced off;
+power-mode outputs are left unchanged. Starting a load chart verifies the
+selected channel is in Load Mode and then turns its load input on automatically.
+
 Always confirm wiring, polarity, voltage, current limit and DUT rating before
 turning an output on. Closing the application does not inherently guarantee
 that hardware outputs are off; the application warns when its last known state

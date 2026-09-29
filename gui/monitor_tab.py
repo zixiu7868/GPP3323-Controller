@@ -17,7 +17,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from matplotlib.ticker import MaxNLocator
 
-from gpp3323 import GPP3323Client, Measurement
+from gpp3323 import GPP3323Client, Measurement, ResponseTimeoutError
 
 
 @dataclass(frozen=True)
@@ -90,6 +90,9 @@ class MonitorTab(ttk.Frame):
         self.interval_var = tk.StringVar(value=str(config.get("sample_interval", 1.0)))
         self.max_points_var = tk.StringVar(value=str(config.get("max_points", 3600)))
         self.latest_var = tk.StringVar(value="尚無量測資料")
+        self.retry_status_var = tk.StringVar(value="")
+        self.retry_count = 0
+        self.retry_count_var = tk.StringVar(value="自動重試累計：0 次")
         self.samples: list[Sample] = []
         self._queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self._stop_event = threading.Event()
@@ -125,6 +128,22 @@ class MonitorTab(ttk.Frame):
         )
 
         ttk.Label(self, textvariable=self.latest_var, anchor="w").pack(fill="x", pady=(0, 6))
+        style = ttk.Style(self)
+        style.configure("MonitorRetry.TLabel", foreground="#b45309")
+        retry_status_frame = ttk.Frame(self)
+        retry_status_frame.pack(fill="x", pady=(0, 6))
+        self.retry_status_label = ttk.Label(
+            retry_status_frame,
+            textvariable=self.retry_status_var,
+            anchor="w",
+            style="MonitorRetry.TLabel",
+        )
+        self.retry_status_label.pack(side="left", fill="x", expand=True)
+        ttk.Label(
+            retry_status_frame,
+            textvariable=self.retry_count_var,
+            anchor="e",
+        ).pack(side="right")
 
         stats_frame = ttk.LabelFrame(self, text="統計（目前保留的量測資料）", padding=6)
         stats_frame.pack(fill="x", pady=(0, 8))
@@ -216,6 +235,9 @@ class MonitorTab(ttk.Frame):
 
         self._running = True
         self._stop_event.clear()
+        self.retry_status_var.set("")
+        self.retry_count = 0
+        self.retry_count_var.set("自動重試累計：0 次")
         start_time = time.monotonic()
 
         def worker() -> None:
@@ -224,12 +246,33 @@ class MonitorTab(ttk.Frame):
                 for channel in channels:
                     if self._stop_event.is_set():
                         break
+                    retry_started = False
+
+                    def on_timeout(attempt: int, total: int) -> None:
+                        nonlocal retry_started
+                        retry_started = True
+                        self._queue.put((
+                            "retrying",
+                            f"CH{channel} 等待回覆逾時，正在自動重試 "
+                            f"({attempt}/{total})…",
+                        ))
+
                     try:
-                        reading: Measurement = client.measure(channel)
+                        reading: Measurement = client.measure(
+                            channel,
+                            timeout_retries=1,
+                            on_timeout=on_timeout,
+                        )
+                    except ResponseTimeoutError as exc:
+                        self._queue.put(("timeout_failed", exc))
+                        self._stop_event.set()
+                        break
                     except Exception as exc:
                         self._queue.put(("error", exc))
                         self._stop_event.set()
                         break
+                    if retry_started:
+                        self._queue.put(("retry_succeeded", None))
                     sample = Sample(
                         datetime.now(),
                         time.monotonic() - start_time,
@@ -253,6 +296,9 @@ class MonitorTab(ttk.Frame):
     def clear(self) -> None:
         self.samples.clear()
         self.latest_var.set("尚無量測資料")
+        self.retry_status_var.set("")
+        self.retry_count = 0
+        self.retry_count_var.set("自動重試累計：0 次")
         self.export_button.configure(state="disabled")
         self._redraw()
 
@@ -275,6 +321,21 @@ class MonitorTab(ttk.Frame):
                     changed = True
                 elif event == "error":
                     messagebox.showerror("連續量測中斷", str(payload), parent=self)
+                elif event == "retrying":
+                    self.retry_count += 1
+                    self.retry_count_var.set(
+                        f"自動重試累計：{self.retry_count} 次"
+                    )
+                    self.retry_status_var.set(str(payload))
+                    # Leave the notice visible for at least one UI poll before
+                    # consuming a fast retry-success event already in the queue.
+                    break
+                elif event == "retry_succeeded":
+                    self.retry_status_var.set("")
+                elif event == "timeout_failed":
+                    self.retry_status_var.set(
+                        f"連續量測已停止：{payload}（自動重試 1 次仍未收到回覆）"
+                    )
                 elif event == "stopped":
                     self._running = False
                     self._update_button_states()

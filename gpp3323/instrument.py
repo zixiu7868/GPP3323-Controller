@@ -11,6 +11,10 @@ class GPPError(RuntimeError):
     """Raised when communication or validation fails."""
 
 
+class ResponseTimeoutError(GPPError):
+    """Raised when a complete instrument response does not arrive in time."""
+
+
 class LoadVoltagePresentError(GPPError):
     """Raised when external voltage prevents a safe switch to Load Mode."""
 
@@ -107,15 +111,38 @@ class GPP3323Client:
         with self._lock:
             self._send(command)
 
-    def query(self, command: str) -> str:
+    def query(
+        self,
+        command: str,
+        *,
+        timeout_retries: int = 0,
+        on_timeout: Callable[[int, int], None] | None = None,
+    ) -> str:
         command = command.strip()
         if not command:
             raise ValueError("SCPI query cannot be empty")
+        timeout_retries = int(timeout_retries)
+        if timeout_retries < 0:
+            raise ValueError("timeout_retries cannot be negative")
         with self._lock:
             self._send(command)
-            response = self._readline()
-            self._log(f"RX  {response}")
-            return response
+            for attempt in range(timeout_retries + 1):
+                try:
+                    response = self._readline()
+                except ResponseTimeoutError:
+                    if attempt >= timeout_retries:
+                        raise
+                    retry_number = attempt + 1
+                    self._log(
+                        f"RX  timeout; retrying wait "
+                        f"({retry_number}/{timeout_retries})"
+                    )
+                    if on_timeout:
+                        on_timeout(retry_number, timeout_retries)
+                else:
+                    self._log(f"RX  {response}")
+                    return response
+        raise AssertionError("unreachable")
 
     def _send(self, command: str) -> None:
         if self._socket is None:
@@ -139,7 +166,7 @@ class GPP3323Client:
             self._rx_buffer = bytearray(remainder)
             return raw.rstrip(b"\r").decode("ascii", errors="replace").strip()
         except socket.timeout as exc:
-            raise GPPError("等待設備回覆逾時") from exc
+            raise ResponseTimeoutError("等待設備回覆逾時") from exc
         except OSError as exc:
             raise GPPError(f"SCPI 接收失敗：{exc}") from exc
 
@@ -211,6 +238,35 @@ class GPP3323Client:
         channel = self._validate_load_channel(channel)
         return self.query(f":MODE{channel}?")
 
+    @classmethod
+    def is_load_mode(cls, mode: str) -> bool:
+        """Accept both short (CC) and descriptive (CC LOAD) mode replies."""
+        normalized = re.sub(r"[\s_-]+", " ", str(mode).strip().upper())
+        return re.fullmatch(r"(?:CV|CC|CR)(?: ?LOAD)?", normalized) is not None
+
+    def ensure_load_inputs_off(self) -> dict[int, tuple[str, bool]]:
+        """Turn off CH1/CH2 inputs only when those channels are in Load Mode."""
+        result: dict[int, tuple[str, bool]] = {}
+        with self._lock:
+            for channel in (1, 2):
+                mode = self.get_channel_mode(channel)
+                if self.is_load_mode(mode) and self.get_output(channel):
+                    self.set_output(channel, False)
+                result[channel] = (mode, self.get_output(channel))
+        return result
+
+    def enable_load_input(self, channel: int) -> tuple[str, bool]:
+        """Enable a channel only after verifying that it is in Load Mode."""
+        channel = self._validate_load_channel(channel)
+        with self._lock:
+            mode = self.get_channel_mode(channel)
+            if not self.is_load_mode(mode):
+                raise GPPError(
+                    f"CH{channel} 目前不是 Load Mode，請先套用 CV、CC 或 CR 設定"
+                )
+            self.set_output(channel, True)
+            return mode, self.get_output(channel)
+
     def set_load_voltage(self, channel: int, voltage: float) -> None:
         channel = self._validate_load_channel(channel)
         voltage = float(voltage)
@@ -268,18 +324,40 @@ class GPP3323Client:
     def all_outputs_off(self) -> None:
         self.write("ALLOUTOFF")
 
-    def measure(self, channel: int) -> Measurement:
+    def measure(
+        self,
+        channel: int,
+        *,
+        timeout_retries: int = 0,
+        on_timeout: Callable[[int, int], None] | None = None,
+    ) -> Measurement:
         channel = self._validate_channel(channel)
-        response = self.query(f":MEASure{channel}:ALL?")
+        response = self.query(
+            f":MEASure{channel}:ALL?",
+            timeout_retries=timeout_retries,
+            on_timeout=on_timeout,
+        )
         values = [float(x) for x in re.findall(
             r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][-+]?\d+)?", response
         )]
         if len(values) >= 3:
             return Measurement(values[0], values[1], values[2])
 
-        voltage = float(self.query(f":MEASure{channel}:VOLTage?"))
-        current = float(self.query(f":MEASure{channel}:CURRent?"))
-        power = float(self.query(f":MEASure{channel}:POWer?"))
+        voltage = float(self.query(
+            f":MEASure{channel}:VOLTage?",
+            timeout_retries=timeout_retries,
+            on_timeout=on_timeout,
+        ))
+        current = float(self.query(
+            f":MEASure{channel}:CURRent?",
+            timeout_retries=timeout_retries,
+            on_timeout=on_timeout,
+        ))
+        power = float(self.query(
+            f":MEASure{channel}:POWer?",
+            timeout_retries=timeout_retries,
+            on_timeout=on_timeout,
+        ))
         return Measurement(voltage, current, power)
 
     def get_error(self) -> str:

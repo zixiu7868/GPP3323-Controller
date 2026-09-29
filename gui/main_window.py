@@ -20,6 +20,7 @@ class MainWindow(tk.Tk):
         self.title("GW Instek GPP-3323 控制與監測")
         self.geometry("1180x780")
         self.minsize(980, 680)
+        self.state("zoomed")
         self.client: GPP3323Client | None = None
         self.config_path = Path(__file__).resolve().parents[1] / "config.json"
         self.config_data = self._load_config()
@@ -62,7 +63,10 @@ class MainWindow(tk.Tk):
             "sample_interval": 1.0,
             "max_points": 3600,
             "load_sample_interval": 1.0,
-            "load_max_points": 3600,
+            "load_stop_mode": "duration",
+            "load_test_duration_minutes": 60.0,
+            "load_cutoff_voltage": 3.0,
+            "load_notes": "",
         }
         try:
             loaded = json.loads(self.config_path.read_text(encoding="utf-8"))
@@ -93,6 +97,7 @@ class MainWindow(tk.Tk):
         self.monitor_tab.set_connected(True)
         self.load_tab.set_connected(True)
         self.status_var.set(f"已連線：{client.identity}")
+        self.load_tab.initialize_safe_state()
         self.channel_tab.refresh_all()
 
     def _disconnected(self) -> None:
