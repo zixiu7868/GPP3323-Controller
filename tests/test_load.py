@@ -3,7 +3,12 @@ from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from gui.load_tab import evaluate_stop_condition, next_screenshot_path
+from gui.load_tab import (
+    estimate_time_to_voltage,
+    evaluate_stop_condition,
+    format_estimated_time,
+    next_screenshot_path,
+)
 
 
 class LoadStopConditionTests(unittest.TestCase):
@@ -25,6 +30,24 @@ class LoadStopConditionTests(unittest.TestCase):
             first.touch()
             second = next_screenshot_path(directory, timestamp)
             self.assertEqual(second.name, "gpp3323_screen_20260828_183045_002.png")
+
+    def test_estimates_time_to_two_volts_after_thirty_seconds(self) -> None:
+        samples = [(0.0, 4.0), (10.0, 3.8), (20.0, 3.6), (30.0, 3.4)]
+        estimate = estimate_time_to_voltage(samples)
+        self.assertIsNotNone(estimate)
+        self.assertAlmostEqual(estimate or 0.0, 100.0)
+
+    def test_estimate_waits_for_thirty_seconds(self) -> None:
+        self.assertIsNone(estimate_time_to_voltage([(0.0, 4.0), (29.9, 3.5)]))
+
+    def test_estimate_rejects_flat_or_rising_voltage(self) -> None:
+        self.assertIsNone(estimate_time_to_voltage([(0.0, 3.0), (30.0, 3.0)]))
+        self.assertIsNone(estimate_time_to_voltage([(0.0, 3.0), (30.0, 3.1)]))
+
+    def test_formats_estimated_time(self) -> None:
+        self.assertEqual(format_estimated_time(45.0), "45 秒")
+        self.assertEqual(format_estimated_time(90.0), "1.5 分鐘")
+        self.assertEqual(format_estimated_time(7200.0), "2.00 小時")
 
 
 if __name__ == "__main__":

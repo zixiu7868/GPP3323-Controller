@@ -69,7 +69,10 @@ and the user is asked to disconnect the external source first.
 Load monitoring can stop after a selected test duration in minutes or when the measured
 voltage falls to a selected cutoff voltage. Reaching either condition stops
 the chart and turns the selected load input off. The elapsed test time remains
-visible while sampling. The application screenshot button captures the entire
+visible while sampling. After at least 30 seconds, the application uses a linear
+trend of the collected Vout samples to estimate the total elapsed time required
+to reach 2.0 V. If Vout is flat or rising, it reports that an estimate is not
+available. The application screenshot button captures the entire
 GUI window and saves a PNG in `data` with a timestamp and three-digit sequence
 number.
 
