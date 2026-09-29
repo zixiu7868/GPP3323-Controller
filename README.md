@@ -72,7 +72,9 @@ the chart and turns the selected load input off. The elapsed test time remains
 visible while sampling. Every 30 seconds, the application uses a linear trend
 of all Vout samples collected in the current test to update the estimated total
 elapsed time required to reach 2.0 V. If Vout is flat or rising, it reports that
-an estimate is not available. The application screenshot button captures the entire
+an estimate is not available. In CC Load Mode, the same update also estimates the
+remaining battery capacity to 2.0 V in mAh from the average measured current and
+the predicted remaining time. The application screenshot button captures the entire
 GUI window and saves a PNG in `data` with a timestamp and three-digit sequence
 number.
 

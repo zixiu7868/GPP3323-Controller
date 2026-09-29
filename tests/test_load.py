@@ -4,6 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from gui.load_tab import (
+    estimate_remaining_capacity_mah,
     estimate_time_to_voltage,
     evaluate_stop_condition,
     format_estimated_time,
@@ -48,6 +49,18 @@ class LoadStopConditionTests(unittest.TestCase):
         self.assertEqual(format_estimated_time(45.0), "45 秒")
         self.assertEqual(format_estimated_time(90.0), "1.5 分鐘")
         self.assertEqual(format_estimated_time(7200.0), "2.00 小時")
+
+    def test_estimates_cc_capacity_remaining_to_cutoff(self) -> None:
+        capacity = estimate_remaining_capacity_mah(
+            estimated_total_seconds=7200.0,
+            elapsed_seconds=1800.0,
+            measured_currents=[0.0098, 0.0100, 0.0102],
+        )
+        self.assertIsNotNone(capacity)
+        self.assertAlmostEqual(capacity or 0.0, 15.0)
+
+    def test_capacity_estimate_requires_nonzero_current(self) -> None:
+        self.assertIsNone(estimate_remaining_capacity_mah(3600.0, 30.0, [0.0, 0.0]))
 
 
 if __name__ == "__main__":

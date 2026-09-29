@@ -71,6 +71,24 @@ def format_estimated_time(seconds: float) -> str:
     return f"{seconds / 86400.0:.2f} 天"
 
 
+def estimate_remaining_capacity_mah(
+    estimated_total_seconds: float,
+    elapsed_seconds: float,
+    measured_currents: list[float],
+) -> float | None:
+    """Estimate CC capacity remaining until the predicted cutoff time."""
+    valid_currents = [
+        abs(current)
+        for current in measured_currents
+        if math.isfinite(current) and abs(current) > 1e-9
+    ]
+    if not valid_currents:
+        return None
+    remaining_seconds = max(0.0, estimated_total_seconds - elapsed_seconds)
+    average_current = sum(valid_currents) / len(valid_currents)
+    return average_current * remaining_seconds / 3600.0 * 1000.0
+
+
 def evaluate_stop_condition(
     mode: str,
     target: float,
@@ -115,6 +133,7 @@ class LoadTab(ttk.Frame):
         self.latest_var = tk.StringVar(value="尚無量測資料")
         self.elapsed_var = tk.StringVar(value="目前測試時間：0.00 min")
         self.estimate_var = tk.StringVar(value="每 30 秒估算至 2.0 V：尚未計算")
+        self.capacity_var = tk.StringVar(value="CC 至 2.0 V 剩餘容量：尚未計算")
         self.interval_var = tk.StringVar(value=str(config.get("load_sample_interval", 1.0)))
         saved_stop_mode = config.get("load_stop_mode", "duration")
         self.stop_mode_var = tk.StringVar(
@@ -213,6 +232,8 @@ class LoadTab(ttk.Frame):
         ttk.Label(status_line, textvariable=self.latest_var, anchor="w").pack(side="left", fill="x", expand=True)
         ttk.Label(status_line, textvariable=self.elapsed_var, anchor="e", font=("Segoe UI", 10, "bold")).pack(side="right")
         ttk.Label(self, textvariable=self.estimate_var, anchor="w", foreground="#0b4f9c",
+                  font=("Segoe UI", 10, "bold")).pack(fill="x", pady=(0, 4))
+        ttk.Label(self, textvariable=self.capacity_var, anchor="w", foreground="#198754",
                   font=("Segoe UI", 10, "bold")).pack(fill="x", pady=(0, 4))
 
     def _build_plot(self) -> None:
@@ -373,6 +394,7 @@ class LoadTab(ttk.Frame):
         self._stop_event.clear()
         self.elapsed_var.set("目前測試時間：0.00 min")
         self.estimate_var.set("每 30 秒估算至 2.0 V：計算中…")
+        self.capacity_var.set("CC 至 2.0 V 剩餘容量：計算中…")
         start_time = time.monotonic()
 
         def worker() -> None:
@@ -381,6 +403,7 @@ class LoadTab(ttk.Frame):
             load_enabled = False
             active_mode = ""
             estimation_samples: list[tuple[float, float]] = []
+            estimation_currents: list[float] = []
             next_estimation_elapsed = ESTIMATION_WINDOW_SECONDS
             try:
                 mode, enabled = client.enable_load_input(channel)
@@ -403,9 +426,17 @@ class LoadTab(ttk.Frame):
                                 reading.voltage, reading.current, reading.power)
                 self._queue.put(("sample", sample))
                 estimation_samples.append((elapsed, reading.voltage))
+                estimation_currents.append(reading.current)
                 if elapsed >= next_estimation_elapsed:
                     estimate = estimate_time_to_voltage(estimation_samples)
-                    self._queue.put(("estimate", (elapsed, estimate)))
+                    capacity = None
+                    if estimate is not None and active_mode.strip().upper().startswith("CC"):
+                        capacity = estimate_remaining_capacity_mah(
+                            estimate, elapsed, estimation_currents
+                        )
+                    self._queue.put(
+                        ("estimate", (elapsed, estimate, capacity, active_mode))
+                    )
                     while next_estimation_elapsed <= elapsed:
                         next_estimation_elapsed += ESTIMATION_WINDOW_SECONDS
                 should_stop, cutoff_armed = evaluate_stop_condition(
@@ -447,6 +478,7 @@ class LoadTab(ttk.Frame):
         self.latest_var.set("尚無量測資料")
         self.elapsed_var.set("目前測試時間：0.00 min")
         self.estimate_var.set("每 30 秒估算至 2.0 V：尚未計算")
+        self.capacity_var.set("CC 至 2.0 V 剩餘容量：尚未計算")
         self.export_button.configure(state="disabled")
         self._redraw()
 
@@ -486,18 +518,27 @@ class LoadTab(ttk.Frame):
                         "Load 測試完成", f"{reason}\nCH{channel} Load Input 已關閉。", parent=self
                     )
                 elif event == "estimate":
-                    estimate_elapsed, estimate = payload  # type: ignore[misc]
+                    estimate_elapsed, estimate, capacity, active_mode = payload  # type: ignore[misc]
                     update_time = format_estimated_time(float(estimate_elapsed))
                     if estimate is None:
                         self.estimate_var.set(
                             f"{update_time} 更新｜至 2.0 V：電壓無下降趨勢，無法預估"
                         )
+                        self.capacity_var.set("CC 至 2.0 V 剩餘容量：等待有效時間預估")
                     else:
                         estimated_seconds = float(estimate)
                         self.estimate_var.set(
                             f"{update_time} 更新｜至 2.0 V：約 "
                             f"{format_estimated_time(estimated_seconds)}（自測試開始）"
                         )
+                        if not str(active_mode).strip().upper().startswith("CC"):
+                            self.capacity_var.set("至 2.0 V 剩餘容量：僅支援 CC Load Mode")
+                        elif capacity is None:
+                            self.capacity_var.set("CC 至 2.0 V 剩餘容量：無有效電流資料")
+                        else:
+                            self.capacity_var.set(
+                                f"{update_time} 更新｜CC 至 2.0 V 剩餘容量：約 {float(capacity):.2f} mAh"
+                            )
                 elif event == "stopped":
                     self._running = False
                     self._update_button_states()
