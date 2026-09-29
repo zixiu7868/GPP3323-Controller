@@ -71,12 +71,8 @@ def format_estimated_time(seconds: float) -> str:
     return f"{seconds / 86400.0:.2f} 天"
 
 
-def estimate_remaining_capacity_mah(
-    estimated_total_seconds: float,
-    elapsed_seconds: float,
-    measured_currents: list[float],
-) -> float | None:
-    """Estimate CC capacity remaining until the predicted cutoff time."""
+def average_measured_current_amps(measured_currents: list[float]) -> float | None:
+    """Return the average magnitude of finite, non-zero measured currents."""
     valid_currents = [
         abs(current)
         for current in measured_currents
@@ -84,9 +80,25 @@ def estimate_remaining_capacity_mah(
     ]
     if not valid_currents:
         return None
+    return sum(valid_currents) / len(valid_currents)
+
+
+def estimate_capacity_mah(duration_seconds: float, measured_currents: list[float]) -> float | None:
+    """Estimate CC capacity for a duration using the average measured current."""
+    average_current = average_measured_current_amps(measured_currents)
+    if average_current is None:
+        return None
+    return average_current * max(0.0, duration_seconds) / 3600.0 * 1000.0
+
+
+def estimate_remaining_capacity_mah(
+    estimated_total_seconds: float,
+    elapsed_seconds: float,
+    measured_currents: list[float],
+) -> float | None:
+    """Estimate CC capacity remaining until the predicted cutoff time."""
     remaining_seconds = max(0.0, estimated_total_seconds - elapsed_seconds)
-    average_current = sum(valid_currents) / len(valid_currents)
-    return average_current * remaining_seconds / 3600.0 * 1000.0
+    return estimate_capacity_mah(remaining_seconds, measured_currents)
 
 
 def evaluate_stop_condition(
@@ -133,7 +145,7 @@ class LoadTab(ttk.Frame):
         self.latest_var = tk.StringVar(value="尚無量測資料")
         self.elapsed_var = tk.StringVar(value="目前測試時間：0.00 min")
         self.estimate_var = tk.StringVar(value="每 30 秒估算至 2.0 V：尚未計算")
-        self.capacity_var = tk.StringVar(value="CC 至 2.0 V 剩餘容量：尚未計算")
+        self.capacity_var = tk.StringVar(value="CC 至 2.0 V 容量：尚未計算")
         self.interval_var = tk.StringVar(value=str(config.get("load_sample_interval", 1.0)))
         saved_stop_mode = config.get("load_stop_mode", "duration")
         self.stop_mode_var = tk.StringVar(
@@ -394,7 +406,7 @@ class LoadTab(ttk.Frame):
         self._stop_event.clear()
         self.elapsed_var.set("目前測試時間：0.00 min")
         self.estimate_var.set("每 30 秒估算至 2.0 V：計算中…")
-        self.capacity_var.set("CC 至 2.0 V 剩餘容量：計算中…")
+        self.capacity_var.set("CC 至 2.0 V 容量：計算中…")
         start_time = time.monotonic()
 
         def worker() -> None:
@@ -429,13 +441,27 @@ class LoadTab(ttk.Frame):
                 estimation_currents.append(reading.current)
                 if elapsed >= next_estimation_elapsed:
                     estimate = estimate_time_to_voltage(estimation_samples)
-                    capacity = None
+                    total_capacity = remaining_capacity = average_current = None
                     if estimate is not None and active_mode.strip().upper().startswith("CC"):
-                        capacity = estimate_remaining_capacity_mah(
+                        total_capacity = estimate_capacity_mah(
+                            estimate, estimation_currents
+                        )
+                        remaining_capacity = estimate_remaining_capacity_mah(
                             estimate, elapsed, estimation_currents
                         )
+                        average_current = average_measured_current_amps(estimation_currents)
                     self._queue.put(
-                        ("estimate", (elapsed, estimate, capacity, active_mode))
+                        (
+                            "estimate",
+                            (
+                                elapsed,
+                                estimate,
+                                total_capacity,
+                                remaining_capacity,
+                                average_current,
+                                active_mode,
+                            ),
+                        )
                     )
                     while next_estimation_elapsed <= elapsed:
                         next_estimation_elapsed += ESTIMATION_WINDOW_SECONDS
@@ -478,7 +504,7 @@ class LoadTab(ttk.Frame):
         self.latest_var.set("尚無量測資料")
         self.elapsed_var.set("目前測試時間：0.00 min")
         self.estimate_var.set("每 30 秒估算至 2.0 V：尚未計算")
-        self.capacity_var.set("CC 至 2.0 V 剩餘容量：尚未計算")
+        self.capacity_var.set("CC 至 2.0 V 容量：尚未計算")
         self.export_button.configure(state="disabled")
         self._redraw()
 
@@ -518,26 +544,37 @@ class LoadTab(ttk.Frame):
                         "Load 測試完成", f"{reason}\nCH{channel} Load Input 已關閉。", parent=self
                     )
                 elif event == "estimate":
-                    estimate_elapsed, estimate, capacity, active_mode = payload  # type: ignore[misc]
+                    (
+                        estimate_elapsed,
+                        estimate,
+                        total_capacity,
+                        remaining_capacity,
+                        average_current,
+                        active_mode,
+                    ) = payload  # type: ignore[misc]
                     update_time = format_estimated_time(float(estimate_elapsed))
                     if estimate is None:
                         self.estimate_var.set(
                             f"{update_time} 更新｜至 2.0 V：電壓無下降趨勢，無法預估"
                         )
-                        self.capacity_var.set("CC 至 2.0 V 剩餘容量：等待有效時間預估")
+                        self.capacity_var.set("CC 至 2.0 V 容量：等待有效時間預估")
                     else:
                         estimated_seconds = float(estimate)
+                        remaining_seconds = max(0.0, estimated_seconds - float(estimate_elapsed))
                         self.estimate_var.set(
-                            f"{update_time} 更新｜至 2.0 V：約 "
-                            f"{format_estimated_time(estimated_seconds)}（自測試開始）"
+                            f"{update_time} 更新｜至 2.0 V：總時間約 "
+                            f"{format_estimated_time(estimated_seconds)}｜剩餘約 "
+                            f"{format_estimated_time(remaining_seconds)}"
                         )
                         if not str(active_mode).strip().upper().startswith("CC"):
-                            self.capacity_var.set("至 2.0 V 剩餘容量：僅支援 CC Load Mode")
-                        elif capacity is None:
-                            self.capacity_var.set("CC 至 2.0 V 剩餘容量：無有效電流資料")
+                            self.capacity_var.set("至 2.0 V 容量：僅支援 CC Load Mode")
+                        elif total_capacity is None or remaining_capacity is None or average_current is None:
+                            self.capacity_var.set("CC 至 2.0 V 容量：無有效電流資料")
                         else:
                             self.capacity_var.set(
-                                f"{update_time} 更新｜CC 至 2.0 V 剩餘容量：約 {float(capacity):.2f} mAh"
+                                f"CC 至 2.0 V：總容量約 {float(total_capacity):.2f} mAh｜"
+                                f"剩餘約 {float(remaining_capacity):.2f} mAh｜"
+                                f"平均電流 {float(average_current) * 1000.0:.2f} mA"
                             )
                 elif event == "stopped":
                     self._running = False
