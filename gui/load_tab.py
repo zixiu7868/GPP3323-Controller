@@ -114,7 +114,7 @@ class LoadTab(ttk.Frame):
         self.status_var = tk.StringVar(value="模式：—　LOAD INPUT：—")
         self.latest_var = tk.StringVar(value="尚無量測資料")
         self.elapsed_var = tk.StringVar(value="目前測試時間：0.00 min")
-        self.estimate_var = tk.StringVar(value="30 秒估算至 2.0 V：尚未計算")
+        self.estimate_var = tk.StringVar(value="每 30 秒估算至 2.0 V：尚未計算")
         self.interval_var = tk.StringVar(value=str(config.get("load_sample_interval", 1.0)))
         saved_stop_mode = config.get("load_stop_mode", "duration")
         self.stop_mode_var = tk.StringVar(
@@ -372,7 +372,7 @@ class LoadTab(ttk.Frame):
         self._running = True
         self._stop_event.clear()
         self.elapsed_var.set("目前測試時間：0.00 min")
-        self.estimate_var.set("30 秒估算至 2.0 V：計算中…")
+        self.estimate_var.set("每 30 秒估算至 2.0 V：計算中…")
         start_time = time.monotonic()
 
         def worker() -> None:
@@ -381,7 +381,7 @@ class LoadTab(ttk.Frame):
             load_enabled = False
             active_mode = ""
             estimation_samples: list[tuple[float, float]] = []
-            estimation_finished = False
+            next_estimation_elapsed = ESTIMATION_WINDOW_SECONDS
             try:
                 mode, enabled = client.enable_load_input(channel)
             except Exception as exc:
@@ -403,10 +403,11 @@ class LoadTab(ttk.Frame):
                                 reading.voltage, reading.current, reading.power)
                 self._queue.put(("sample", sample))
                 estimation_samples.append((elapsed, reading.voltage))
-                if not estimation_finished and elapsed >= ESTIMATION_WINDOW_SECONDS:
+                if elapsed >= next_estimation_elapsed:
                     estimate = estimate_time_to_voltage(estimation_samples)
-                    self._queue.put(("estimate", estimate))
-                    estimation_finished = True
+                    self._queue.put(("estimate", (elapsed, estimate)))
+                    while next_estimation_elapsed <= elapsed:
+                        next_estimation_elapsed += ESTIMATION_WINDOW_SECONDS
                 should_stop, cutoff_armed = evaluate_stop_condition(
                     stop_mode, stop_target_seconds, elapsed, reading.voltage, cutoff_armed
                 )
@@ -445,7 +446,7 @@ class LoadTab(ttk.Frame):
         self.samples.clear()
         self.latest_var.set("尚無量測資料")
         self.elapsed_var.set("目前測試時間：0.00 min")
-        self.estimate_var.set("30 秒估算至 2.0 V：尚未計算")
+        self.estimate_var.set("每 30 秒估算至 2.0 V：尚未計算")
         self.export_button.configure(state="disabled")
         self._redraw()
 
@@ -485,13 +486,17 @@ class LoadTab(ttk.Frame):
                         "Load 測試完成", f"{reason}\nCH{channel} Load Input 已關閉。", parent=self
                     )
                 elif event == "estimate":
-                    if payload is None:
-                        self.estimate_var.set("30 秒估算至 2.0 V：電壓無下降趨勢，無法預估")
-                    else:
-                        estimated_seconds = float(payload)
+                    estimate_elapsed, estimate = payload  # type: ignore[misc]
+                    update_time = format_estimated_time(float(estimate_elapsed))
+                    if estimate is None:
                         self.estimate_var.set(
-                            "30 秒估算至 2.0 V："
-                            f"約 {format_estimated_time(estimated_seconds)}（自測試開始）"
+                            f"{update_time} 更新｜至 2.0 V：電壓無下降趨勢，無法預估"
+                        )
+                    else:
+                        estimated_seconds = float(estimate)
+                        self.estimate_var.set(
+                            f"{update_time} 更新｜至 2.0 V：約 "
+                            f"{format_estimated_time(estimated_seconds)}（自測試開始）"
                         )
                 elif event == "stopped":
                     self._running = False
