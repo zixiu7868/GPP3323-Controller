@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from gpp3323.i18n import tr
+
 import re
 import socket
 import threading
@@ -22,8 +24,7 @@ class LoadVoltagePresentError(GPPError):
         self.channel = channel
         self.voltage = voltage
         super().__init__(
-            f"CH{channel} 端子目前偵測到 {voltage:.4g} V。"
-            "請先斷開外部電源，確認端子無電壓後再切換 Load Mode。"
+            tr('CH{0} 端子目前偵測到 {1} V。請先斷開外部電源，確認端子無電壓後再切換 Load Mode。', f'{channel}', f'{voltage:.4g}')
         )
 
 
@@ -85,11 +86,11 @@ class GPP3323Client:
                 identity = self.query("*IDN?")
             except Exception as exc:
                 self.disconnect()
-                raise GPPError(f"無法連線至 {self.host}:{self.port}: {exc}") from exc
+                raise GPPError(tr('無法連線至 {0}:{1}: {2}', f'{self.host}', f'{self.port}', f'{exc}')) from exc
 
             if validate_model and "GPP-3323" not in identity.upper():
                 self.disconnect()
-                raise GPPError(f"設備回覆不是 GPP-3323：{identity!r}")
+                raise GPPError(tr('設備回覆不是 GPP-3323：{0}', f'{identity!r}'))
             self.identity = identity
             return identity
 
@@ -146,29 +147,29 @@ class GPP3323Client:
 
     def _send(self, command: str) -> None:
         if self._socket is None:
-            raise GPPError("設備尚未連線")
+            raise GPPError(tr('設備尚未連線'))
         self._log(f"TX  {command}")
         try:
             self._socket.sendall((command + "\n").encode("ascii"))
         except (OSError, UnicodeEncodeError) as exc:
-            raise GPPError(f"SCPI 傳送失敗：{exc}") from exc
+            raise GPPError(tr('SCPI 傳送失敗：{0}', f'{exc}')) from exc
 
     def _readline(self) -> str:
         if self._socket is None:
-            raise GPPError("設備尚未連線")
+            raise GPPError(tr('設備尚未連線'))
         try:
             while b"\n" not in self._rx_buffer:
                 block = self._socket.recv(4096)
                 if not block:
-                    raise GPPError("設備已關閉連線")
+                    raise GPPError(tr('設備已關閉連線'))
                 self._rx_buffer.extend(block)
             raw, _, remainder = self._rx_buffer.partition(b"\n")
             self._rx_buffer = bytearray(remainder)
             return raw.rstrip(b"\r").decode("ascii", errors="replace").strip()
         except socket.timeout as exc:
-            raise ResponseTimeoutError("等待設備回覆逾時") from exc
+            raise ResponseTimeoutError(tr('等待設備回覆逾時')) from exc
         except OSError as exc:
-            raise GPPError(f"SCPI 接收失敗：{exc}") from exc
+            raise GPPError(tr('SCPI 接收失敗：{0}', f'{exc}')) from exc
 
     @staticmethod
     def _validate_channel(channel: int) -> int:
@@ -182,9 +183,9 @@ class GPP3323Client:
         voltage = float(voltage)
         if channel in (1, 2):
             if not 0.0 <= voltage <= self.CH12_MAX_VOLTAGE:
-                raise ValueError("CH1/CH2 電壓必須介於 0 至 32 V")
+                raise ValueError(tr('CH1/CH2 電壓必須介於 0 至 32 V'))
         elif not any(abs(voltage - allowed) < 1e-6 for allowed in self.CH3_VOLTAGES):
-            raise ValueError("CH3 電壓只能是 1.8、2.5、3.3 或 5.0 V")
+            raise ValueError(tr('CH3 電壓只能是 1.8、2.5、3.3 或 5.0 V'))
         self.write(f":SOURce{channel}:VOLTage {voltage:.3f}")
 
     def get_voltage_setting(self, channel: int) -> float:
@@ -194,10 +195,10 @@ class GPP3323Client:
     def set_current(self, channel: int, current: float) -> None:
         channel = self._validate_channel(channel)
         if channel == 3:
-            raise ValueError("GPP-3323 CH3 不支援 SCPI 電流設定")
+            raise ValueError(tr('GPP-3323 CH3 不支援 SCPI 電流設定'))
         current = float(current)
         if not 0.0 <= current <= self.CH12_MAX_CURRENT:
-            raise ValueError("CH1/CH2 電流必須介於 0 至 3 A")
+            raise ValueError(tr('CH1/CH2 電流必須介於 0 至 3 A'))
         self.write(f":SOURce{channel}:CURRent {current:.4f}")
 
     def get_current_setting(self, channel: int) -> float | None:
@@ -219,14 +220,14 @@ class GPP3323Client:
     def _validate_load_channel(channel: int) -> int:
         channel = int(channel)
         if channel not in (1, 2):
-            raise ValueError("GPP-3323 Load Mode 僅支援 CH1 或 CH2")
+            raise ValueError(tr('GPP-3323 Load Mode 僅支援 CH1 或 CH2'))
         return channel
 
     @classmethod
     def _validate_load_mode(cls, mode: str) -> str:
         mode = str(mode).strip().upper()
         if mode not in cls.LOAD_MODES:
-            raise ValueError("Load Mode 必須是 CV、CC 或 CR")
+            raise ValueError(tr('Load Mode 必須是 CV、CC 或 CR'))
         return mode
 
     def set_load_mode(self, channel: int, mode: str, enabled: bool = True) -> None:
@@ -262,7 +263,7 @@ class GPP3323Client:
             mode = self.get_channel_mode(channel)
             if not self.is_load_mode(mode):
                 raise GPPError(
-                    f"CH{channel} 目前不是 Load Mode，請先套用 CV、CC 或 CR 設定"
+                    tr('CH{0} 目前不是 Load Mode，請先套用 CV、CC 或 CR 設定', f'{channel}')
                 )
             self.set_output(channel, True)
             return mode, self.get_output(channel)
@@ -271,21 +272,21 @@ class GPP3323Client:
         channel = self._validate_load_channel(channel)
         voltage = float(voltage)
         if not self.LOAD_MIN_VOLTAGE <= voltage <= self.LOAD_MAX_VOLTAGE:
-            raise ValueError("Load CV 電壓必須介於 1.5 至 33 V")
+            raise ValueError(tr('Load CV 電壓必須介於 1.5 至 33 V'))
         self.write(f":SOURce{channel}:VOLTage {voltage:.3f}")
 
     def set_load_current(self, channel: int, current: float) -> None:
         channel = self._validate_load_channel(channel)
         current = float(current)
         if not 0.0 <= current <= self.LOAD_MAX_CURRENT:
-            raise ValueError("Load CC 電流必須介於 0 至 3.2 A")
+            raise ValueError(tr('Load CC 電流必須介於 0 至 3.2 A'))
         self.write(f":SOURce{channel}:CURRent {current:.4f}")
 
     def set_load_resistance(self, channel: int, resistance: float) -> None:
         channel = self._validate_load_channel(channel)
         resistance = float(resistance)
         if not self.LOAD_MIN_RESISTANCE <= resistance <= self.LOAD_MAX_RESISTANCE:
-            raise ValueError("Load CR 電阻必須介於 1 至 1000 Ω")
+            raise ValueError(tr('Load CR 電阻必須介於 1 至 1000 Ω'))
         self.write(f":LOAD{channel}:RESistor {resistance:.3f}")
 
     def get_load_setting(self, channel: int, mode: str) -> float:
@@ -298,21 +299,24 @@ class GPP3323Client:
         return float(self.query(f":LOAD{channel}:RESistor?"))
 
     def configure_load(self, channel: int, mode: str, value: float) -> str:
-        """Switch mode and set its level without enabling the load input."""
+        """Update an active load mode in place; guard actual mode switches."""
         channel = self._validate_load_channel(channel)
         mode = self._validate_load_mode(mode)
         value = float(value)
         if mode == "CV" and not self.LOAD_MIN_VOLTAGE <= value <= self.LOAD_MAX_VOLTAGE:
-            raise ValueError("Load CV 電壓必須介於 1.5 至 33 V")
+            raise ValueError(tr('Load CV 電壓必須介於 1.5 至 33 V'))
         if mode == "CC" and not 0.0 <= value <= self.LOAD_MAX_CURRENT:
-            raise ValueError("Load CC 電流必須介於 0 至 3.2 A")
+            raise ValueError(tr('Load CC 電流必須介於 0 至 3.2 A'))
         if mode == "CR" and not self.LOAD_MIN_RESISTANCE <= value <= self.LOAD_MAX_RESISTANCE:
-            raise ValueError("Load CR 電阻必須介於 1 至 1000 Ω")
+            raise ValueError(tr('Load CR 電阻必須介於 1 至 1000 Ω'))
         with self._lock:
-            terminal_voltage = self.measure(channel).voltage
-            if abs(terminal_voltage) >= self.LOAD_SWITCH_VOLTAGE_THRESHOLD:
-                raise LoadVoltagePresentError(channel, terminal_voltage)
-            self.set_load_mode(channel, mode, True)
+            actual_mode = self.get_channel_mode(channel)
+            same_mode = self.is_load_mode(actual_mode) and actual_mode.strip().upper().startswith(mode)
+            if not same_mode:
+                terminal_voltage = self.measure(channel).voltage
+                if abs(terminal_voltage) >= self.LOAD_SWITCH_VOLTAGE_THRESHOLD:
+                    raise LoadVoltagePresentError(channel, terminal_voltage)
+                self.set_load_mode(channel, mode, True)
             if mode == "CV":
                 self.set_load_voltage(channel, value)
             elif mode == "CC":

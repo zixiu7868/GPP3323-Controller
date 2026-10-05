@@ -144,6 +144,24 @@ class InstrumentTests(unittest.TestCase):
         self.assertEqual(self.client.enable_load_input(1), ("CC LOAD", True))
         self.assertTrue(self.client.get_output(1))
 
+    def test_same_load_mode_updates_with_external_voltage(self) -> None:
+        for mode, value in (("CC", 0.7), ("CV", 4.0), ("CR", 200.0)):
+            for enabled in (False, True):
+                with self.subTest(mode=mode, enabled=enabled):
+                    self.fake.mode[1] = f"{mode} LOAD"
+                    self.fake.external_voltage[1] = 5.0
+                    self.client.set_output(1, enabled)
+                    self.client.configure_load(1, mode, value)
+                    self.assertAlmostEqual(self.client.get_load_setting(1, mode), value)
+                    self.assertEqual(self.client.get_output(1), enabled)
+
+    def test_different_load_mode_still_checks_voltage(self) -> None:
+        self.fake.mode[1] = "CC LOAD"
+        self.fake.external_voltage[1] = 5.0
+        with self.assertRaises(LoadVoltagePresentError):
+            self.client.configure_load(1, "CV", 4.0)
+        self.assertEqual(self.client.get_channel_mode(1), "CC LOAD")
+
     def test_load_input_enable_requires_load_mode(self) -> None:
         with self.assertRaisesRegex(Exception, "不是 Load Mode"):
             self.client.enable_load_input(2)

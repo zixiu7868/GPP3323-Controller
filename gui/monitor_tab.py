@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from gpp3323.i18n import tr
+
 import csv
 import queue
 import statistics
@@ -28,6 +30,11 @@ class Sample:
     voltage: float
     current: float
     power: float
+
+    @property
+    def calculated_power(self) -> float:
+        """Watts from measured voltage/current; power retains instrument readback."""
+        return self.voltage * self.current
 
 
 @dataclass(frozen=True)
@@ -89,10 +96,10 @@ class MonitorTab(ttk.Frame):
         self.channel_vars = {channel: tk.BooleanVar(value=channel == 1) for channel in (1, 2, 3)}
         self.interval_var = tk.StringVar(value=str(config.get("sample_interval", 1.0)))
         self.max_points_var = tk.StringVar(value=str(config.get("max_points", 3600)))
-        self.latest_var = tk.StringVar(value="尚無量測資料")
+        self.latest_var = tk.StringVar(value=tr('尚無量測資料'))
         self.retry_status_var = tk.StringVar(value="")
         self.retry_count = 0
-        self.retry_count_var = tk.StringVar(value="自動重試累計：0 次")
+        self.retry_count_var = tk.StringVar(value=tr('自動重試累計：0 次'))
         self.samples: list[Sample] = []
         self._queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self._stop_event = threading.Event()
@@ -109,19 +116,19 @@ class MonitorTab(ttk.Frame):
             )
             widget.pack(side="left", padx=4)
             self.control_widgets.append(widget)
-        ttk.Label(controls, text="取樣週期 (s)").pack(side="left", padx=(18, 4))
+        ttk.Label(controls, text=tr('取樣週期 (s)')).pack(side="left", padx=(18, 4))
         interval = ttk.Entry(controls, textvariable=self.interval_var, width=7)
         interval.pack(side="left")
-        ttk.Label(controls, text="保留點數").pack(side="left", padx=(18, 4))
+        ttk.Label(controls, text=tr('保留點數')).pack(side="left", padx=(18, 4))
         max_points = ttk.Entry(controls, textvariable=self.max_points_var, width=8)
         max_points.pack(side="left")
-        self.start_button = ttk.Button(controls, text="開始量測", command=self.start)
+        self.start_button = ttk.Button(controls, text=tr('開始量測'), command=self.start)
         self.start_button.pack(side="left", padx=(18, 4))
-        self.stop_button = ttk.Button(controls, text="停止", command=self.stop)
+        self.stop_button = ttk.Button(controls, text=tr('停止'), command=self.stop)
         self.stop_button.pack(side="left", padx=4)
-        self.clear_button = ttk.Button(controls, text="清除", command=self.clear)
+        self.clear_button = ttk.Button(controls, text=tr('清除'), command=self.clear)
         self.clear_button.pack(side="left", padx=4)
-        self.export_button = ttk.Button(controls, text="匯出 CSV", command=self.export_csv)
+        self.export_button = ttk.Button(controls, text=tr('匯出 CSV'), command=self.export_csv)
         self.export_button.pack(side="right")
         self.control_widgets.extend(
             [interval, max_points, self.start_button, self.stop_button, self.clear_button, self.export_button]
@@ -145,7 +152,7 @@ class MonitorTab(ttk.Frame):
             anchor="e",
         ).pack(side="right")
 
-        stats_frame = ttk.LabelFrame(self, text="統計（目前保留的量測資料）", padding=6)
+        stats_frame = ttk.LabelFrame(self, text=tr('統計（目前保留的量測資料）'), padding=6)
         stats_frame.pack(fill="x", pady=(0, 8))
         columns = (
             "channel",
@@ -160,11 +167,11 @@ class MonitorTab(ttk.Frame):
         )
         headings = {
             "channel": "Channel",
-            "quantity": "量測項目",
-            "latest": "最新值",
-            "minimum": "最小值",
-            "maximum": "最大值",
-            "average": "平均值",
+            "quantity": tr('量測項目'),
+            "latest": tr('最新值'),
+            "minimum": tr('最小值'),
+            "maximum": tr('最大值'),
+            "average": tr('平均值'),
         }
         for column in columns:
             self.stats_table.heading(column, text=headings[column])
@@ -216,28 +223,28 @@ class MonitorTab(ttk.Frame):
             return
         client = self.client_getter()
         if not client:
-            messagebox.showerror("連續量測", "設備尚未連線", parent=self)
+            messagebox.showerror(tr('連續量測'), tr('設備尚未連線'), parent=self)
             return
         channels = [ch for ch, var in self.channel_vars.items() if var.get()]
         if not channels:
-            messagebox.showerror("連續量測", "請至少選擇一個 Channel", parent=self)
+            messagebox.showerror(tr('連續量測'), tr('請至少選擇一個 Channel'), parent=self)
             return
         try:
             interval = float(self.interval_var.get())
             max_points = int(self.max_points_var.get())
             if not 0.2 <= interval <= 3600:
-                raise ValueError("取樣週期必須介於 0.2 至 3600 秒")
+                raise ValueError(tr('取樣週期必須介於 0.2 至 3600 秒'))
             if not 10 <= max_points <= 100000:
-                raise ValueError("保留點數必須介於 10 至 100000")
+                raise ValueError(tr('保留點數必須介於 10 至 100000'))
         except ValueError as exc:
-            messagebox.showerror("連續量測", str(exc), parent=self)
+            messagebox.showerror(tr('連續量測'), str(exc), parent=self)
             return
 
         self._running = True
         self._stop_event.clear()
         self.retry_status_var.set("")
         self.retry_count = 0
-        self.retry_count_var.set("自動重試累計：0 次")
+        self.retry_count_var.set(tr('自動重試累計：0 次'))
         start_time = time.monotonic()
 
         def worker() -> None:
@@ -253,8 +260,7 @@ class MonitorTab(ttk.Frame):
                         retry_started = True
                         self._queue.put((
                             "retrying",
-                            f"CH{channel} 等待回覆逾時，正在自動重試 "
-                            f"({attempt}/{total})…",
+                            tr('CH{0} 等待回覆逾時，正在自動重試 ({1}/{2})…', f'{channel}', f'{attempt}', f'{total}'),
                         ))
 
                     try:
@@ -295,10 +301,10 @@ class MonitorTab(ttk.Frame):
 
     def clear(self) -> None:
         self.samples.clear()
-        self.latest_var.set("尚無量測資料")
+        self.latest_var.set(tr('尚無量測資料'))
         self.retry_status_var.set("")
         self.retry_count = 0
-        self.retry_count_var.set("自動重試累計：0 次")
+        self.retry_count_var.set(tr('自動重試累計：0 次'))
         self.export_button.configure(state="disabled")
         self._redraw()
 
@@ -316,15 +322,15 @@ class MonitorTab(ttk.Frame):
                         f"{sample.timestamp:%Y-%m-%d %H:%M:%S}  CH{sample.channel}  "
                         f"{format_engineering(sample.voltage, 'V')}   "
                         f"{format_engineering(sample.current, 'A')}   "
-                        f"{sample.power:.5f} W"
+                        f"P (V×I): {sample.calculated_power:.5g} W"
                     )
                     changed = True
                 elif event == "error":
-                    messagebox.showerror("連續量測中斷", str(payload), parent=self)
+                    messagebox.showerror(tr('連續量測中斷'), str(payload), parent=self)
                 elif event == "retrying":
                     self.retry_count += 1
                     self.retry_count_var.set(
-                        f"自動重試累計：{self.retry_count} 次"
+                        tr('自動重試累計：{0} 次', f'{self.retry_count}')
                     )
                     self.retry_status_var.set(str(payload))
                     # Leave the notice visible for at least one UI poll before
@@ -334,7 +340,7 @@ class MonitorTab(ttk.Frame):
                     self.retry_status_var.set("")
                 elif event == "timeout_failed":
                     self.retry_status_var.set(
-                        f"連續量測已停止：{payload}（自動重試 1 次仍未收到回覆）"
+                        tr('連續量測已停止：{0}（自動重試 1 次仍未收到回覆）', f'{payload}')
                     )
                 elif event == "stopped":
                     self._running = False
@@ -421,7 +427,7 @@ class MonitorTab(ttk.Frame):
                 "end",
                 values=(
                     f"CH{channel}",
-                    f"電壓 ({voltage_unit})",
+                    tr('電壓 ({0})', f'{voltage_unit}'),
                     f"{stats.latest_voltage * voltage_factor:.5g}",
                     f"{stats.voltage_min * voltage_factor:.5g}",
                     f"{stats.voltage_max * voltage_factor:.5g}",
@@ -433,7 +439,7 @@ class MonitorTab(ttk.Frame):
                 "end",
                 values=(
                     f"CH{channel}",
-                    f"電流 ({current_unit})",
+                    tr('電流 ({0})', f'{current_unit}'),
                     f"{stats.latest_current * current_factor:.5g}",
                     f"{stats.current_min * current_factor:.5g}",
                     f"{stats.current_max * current_factor:.5g}",
@@ -443,12 +449,12 @@ class MonitorTab(ttk.Frame):
 
     def export_csv(self) -> None:
         if not self.samples:
-            messagebox.showinfo("匯出 CSV", "目前沒有資料", parent=self)
+            messagebox.showinfo(tr('匯出 CSV'), tr('目前沒有資料'), parent=self)
             return
         default = f"gpp3323_{datetime.now():%Y%m%d_%H%M%S}.csv"
         path = filedialog.asksaveasfilename(
             parent=self,
-            title="匯出量測資料",
+            title=tr('匯出量測資料'),
             initialdir=str(Path(__file__).resolve().parents[1] / "data"),
             initialfile=default,
             defaultextension=".csv",
@@ -459,7 +465,7 @@ class MonitorTab(ttk.Frame):
         try:
             with open(path, "w", newline="", encoding="utf-8-sig") as stream:
                 writer = csv.writer(stream)
-                writer.writerow(["timestamp", "elapsed_s", "channel", "voltage_V", "current_A", "power_W"])
+                writer.writerow(["timestamp", "elapsed_s", "channel", "voltage_V", "current_A", "power_W", "power_calculated_W"])
                 for sample in self.samples:
                     writer.writerow([
                         sample.timestamp.isoformat(timespec="milliseconds"),
@@ -468,8 +474,9 @@ class MonitorTab(ttk.Frame):
                         f"{sample.voltage:.6f}",
                         f"{sample.current:.6f}",
                         f"{sample.power:.6f}",
+                        f"{sample.calculated_power:.12g}",
                     ])
         except OSError as exc:
-            messagebox.showerror("匯出 CSV", str(exc), parent=self)
+            messagebox.showerror(tr('匯出 CSV'), str(exc), parent=self)
         else:
-            messagebox.showinfo("匯出 CSV", f"已儲存：\n{path}", parent=self)
+            messagebox.showinfo(tr('匯出 CSV'), tr('已儲存：\n{0}', f'{path}'), parent=self)

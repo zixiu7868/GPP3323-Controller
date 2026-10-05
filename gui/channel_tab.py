@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from gpp3323.i18n import tr
+
 import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Any, Callable
@@ -27,9 +29,9 @@ class ChannelTab(ttk.Frame):
         header.pack(fill="x", pady=(0, 12))
         ttk.Label(
             header,
-            text="輸出設定不會自動開啟 Channel；套用設定與 Output ON 是分開操作。",
+            text=tr('輸出設定不會自動開啟 Channel；套用設定與 Output ON 是分開操作。'),
         ).pack(side="left")
-        all_off = ttk.Button(header, text="全部輸出 OFF", command=self.all_off)
+        all_off = ttk.Button(header, text=tr('全部輸出 OFF'), command=self.all_off)
         all_off.pack(side="right")
         self.controls.append(all_off)
 
@@ -47,7 +49,7 @@ class ChannelTab(ttk.Frame):
         self.current_vars[channel] = tk.StringVar(value="—" if channel == 3 else "0.1000")
         self.output_labels[channel] = tk.StringVar(value="OUTPUT OFF")
 
-        ttk.Label(frame, text="設定電壓 (V)").grid(row=0, column=0, sticky="w", pady=5)
+        ttk.Label(frame, text=tr('設定電壓 (V)')).grid(row=0, column=0, sticky="w", pady=5)
         if channel == 3:
             voltage: tk.Widget = ttk.Combobox(
                 frame,
@@ -60,12 +62,12 @@ class ChannelTab(ttk.Frame):
             voltage = ttk.Entry(frame, textvariable=self.voltage_vars[channel], width=14)
         voltage.grid(row=0, column=1, sticky="ew", pady=5)
 
-        ttk.Label(frame, text="電流上限 (A)").grid(row=1, column=0, sticky="w", pady=5)
+        ttk.Label(frame, text=tr('電流上限 (A)')).grid(row=1, column=0, sticky="w", pady=5)
         current = ttk.Entry(frame, textvariable=self.current_vars[channel], width=14)
         current.grid(row=1, column=1, sticky="ew", pady=5)
         if channel == 3:
             current.configure(state="disabled")
-            ttk.Label(frame, text="CH3 電流不可由 SCPI 設定", foreground="#666").grid(
+            ttk.Label(frame, text=tr('CH3 電流不可由 SCPI 設定'), foreground="#666").grid(
                 row=2, column=0, columnspan=2, sticky="w"
             )
 
@@ -76,10 +78,10 @@ class ChannelTab(ttk.Frame):
             font=("Segoe UI", 13, "bold"),
         ).grid(row=4, column=0, columnspan=2, pady=8)
 
-        apply_button = ttk.Button(frame, text="套用 V / I", command=lambda: self.apply(channel))
-        read_button = ttk.Button(frame, text="讀回設定", command=lambda: self.read(channel))
+        apply_button = ttk.Button(frame, text=tr('套用 V / I'), command=lambda: self.apply(channel))
+        read_button = ttk.Button(frame, text=tr('讀回設定'), command=lambda: self.read(channel))
         output_button = ttk.Button(
-            frame, text="切換輸出", command=lambda: self.toggle_output(channel)
+            frame, text=tr('切換輸出'), command=lambda: self.toggle_output(channel)
         )
         apply_button.grid(row=5, column=0, columnspan=2, sticky="ew", pady=4)
         read_button.grid(row=6, column=0, columnspan=2, sticky="ew", pady=4)
@@ -124,12 +126,12 @@ class ChannelTab(ttk.Frame):
                     self.current_vars[channel].set(f"{current:.4f}")
                 self._set_output_display(channel, enabled)
 
-        self.run_io(operation, success, message="正在讀取全部 Channel 狀態…")
+        self.run_io(operation, success, message=tr('正在讀取全部 Channel 狀態…'))
 
     def _client(self) -> GPP3323Client:
         client = self.client_getter()
         if not client:
-            raise RuntimeError("設備尚未連線")
+            raise RuntimeError(tr('設備尚未連線'))
         return client
 
     def apply(self, channel: int) -> None:
@@ -137,7 +139,7 @@ class ChannelTab(ttk.Frame):
             voltage = float(self.voltage_vars[channel].get())
             current = None if channel == 3 else float(self.current_vars[channel].get())
         except ValueError:
-            messagebox.showerror("輸入錯誤", "電壓或電流格式不正確", parent=self)
+            messagebox.showerror(tr('輸入錯誤'), tr('電壓或電流格式不正確'), parent=self)
             return
 
         def operation() -> str:
@@ -150,9 +152,9 @@ class ChannelTab(ttk.Frame):
         self.run_io(
             operation,
             lambda error: messagebox.showinfo(
-                f"CH{channel}", f"設定已套用\n設備狀態：{error}", parent=self
+                f"CH{channel}", tr('設定已套用\n設備狀態：{0}', f'{error}'), parent=self
             ),
-            message=f"正在設定 CH{channel}…",
+            message=tr('正在設定 CH{0}…', f'{channel}'),
         )
 
     def read(self, channel: int) -> None:
@@ -171,16 +173,13 @@ class ChannelTab(ttk.Frame):
                 self.current_vars[channel].set(f"{current:.4f}")
             self._set_output_display(channel, enabled)
 
-        self.run_io(operation, success, message=f"正在讀取 CH{channel} 設定…")
+        self.run_io(operation, success, message=tr('正在讀取 CH{0} 設定…', f'{channel}'))
 
     def toggle_output(self, channel: int) -> None:
         target = not self.output_states[channel]
         if target and not messagebox.askyesno(
-            "確認開啟輸出",
-            f"即將開啟 CH{channel} 輸出。\n"
-            f"設定電壓：{self.voltage_vars[channel].get()} V\n"
-            f"電流上限：{self.current_vars[channel].get()} A\n\n"
-            "請確認接線與負載正確。",
+            tr('確認開啟輸出'),
+            tr('即將開啟 CH{0} 輸出。\n設定電壓：{1} V\n電流上限：{2} A\n\n請確認接線與負載正確。', f'{channel}', f'{self.voltage_vars[channel].get()}', f'{self.current_vars[channel].get()}'),
             parent=self,
         ):
             return
@@ -193,7 +192,7 @@ class ChannelTab(ttk.Frame):
         self.run_io(
             operation,
             lambda enabled: self._set_output_display(channel, enabled),
-            message=f"正在切換 CH{channel} 輸出…",
+            message=tr('正在切換 CH{0} 輸出…', f'{channel}'),
         )
 
     def _set_output_display(self, channel: int, enabled: bool) -> None:
@@ -208,7 +207,7 @@ class ChannelTab(ttk.Frame):
             for channel in (1, 2, 3):
                 self._set_output_display(channel, False)
 
-        self.run_io(operation, success, message="正在關閉全部輸出…")
+        self.run_io(operation, success, message=tr('正在關閉全部輸出…'))
 
     def any_output_on(self) -> bool:
         return any(self.output_states.values())
